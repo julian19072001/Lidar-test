@@ -1,0 +1,6 @@
+[submodule "libs/Lightware_SF40-c"]
+	path = libs/Lightware_SF40-c
+	url = git@github.com:julian19072001/Lightware_SF40-c.git
+[submodule "libs/RPI-serial"]
+	path = libs/RPI-serial
+	url = git@github.com:julian19072001/RPI-serial.git
