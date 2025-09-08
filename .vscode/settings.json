@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "concepts": "c",
+        "lightwaresf40.h": "c",
+        "vector": "cpp"
+    }
+}
