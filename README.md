@@ -1,0 +1,1 @@
+Test program to test the Lightware_SF40-c lidar library
