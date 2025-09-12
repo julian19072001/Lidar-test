@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <pthread.h>
+#include <signal.h>
 #include <opencv2/opencv.hpp>
 #include <vector>
 
@@ -19,16 +20,30 @@ extern "C" {
 }
 
 #define RANGE 500		// Measuring range in centimeters
-#define RESOLUTION 5	// Amount of centimeter per pixel
-#define SIZE 3			// Amount of pixels 
+#define RESOLUTION 2	// Amount of centimeter per pixel
 
-#define CANVAS_SIZE ((RANGE * 2) / 5)
+#define CANVAS_SIZE ((RANGE * 2) / RESOLUTION)
 
 #define LIDAR_LOCATION (CANVAS_SIZE / 2)
 
 pthread_mutex_t imageMutex;
-cv::Mat outputImg = cv::Mat::ones(CANVAS_SIZE, CANVAS_SIZE, CV_8UC1) * 255;
+pthread_t streamThread;
+cv::Mat outputImg = cv::Mat::ones(LIDAR_LOCATION, CANVAS_SIZE, CV_8UC1) * 255;
 bool newImage = false;
+
+// Function to run on exit
+void cleanup(void) {
+    printf("Program is closing. Cleaning up...\n");
+
+	enableStream(false);
+
+	closeLidar();
+}
+
+// Signal handler for Ctrl+C or termination
+void handle_signal(int sig) {
+    exit(0); // Triggers atexit() functions
+}
 
 void InitLidar(){
     setupLidar("/dev/ttyS0", LIDAR_921K6);
@@ -78,9 +93,10 @@ void* processStream(void* arg){
 	streamOutput_t output;
 	static uint16_t previousIndex = 0;
 
-	cv::Mat img(CANVAS_SIZE, CANVAS_SIZE, CV_8UC1, cv::Scalar(255));
+	cv::Mat img(LIDAR_LOCATION, CANVAS_SIZE, CV_8UC1, cv::Scalar(255));
 
     while (1){
+		pthread_testcancel(); 
 		if(getStream(&output) != 0) continue;
 
 		if(previousIndex != output.revolutionIndex){
@@ -91,34 +107,45 @@ void* processStream(void* arg){
 			newImage = true;
 			pthread_mutex_unlock(&imageMutex); 
 
-        	 img.setTo(cv::Scalar(255));
+        	img.setTo(cv::Scalar(255));
 		}
 		for (int i = 0; i<output.pointCount; i++){
 			float angle = 2.0f * M_PI * (float)(output.pointStartIndex + i) / (float)output.pointTotal;
-			int px = LIDAR_LOCATION + (int)(output.pointDistances[i] / RESOLUTION * cosf(angle));
-			int py = LIDAR_LOCATION - (int)(output.pointDistances[i] / RESOLUTION * sinf(angle));
+			angle -= (M_PI / 9);
+			if(angle < 0) angle += (M_PI * 2);
 
-			if (px>=0 && px < CANVAS_SIZE && py >= 0 && py < CANVAS_SIZE)
-                img.at<uchar>(py, px) = 0; 
+			if(angle < (M_PI / 2) || angle > (M_PI * 2)-(M_PI / 2)){
+				angle += (M_PI / 2);
+				int px = LIDAR_LOCATION - (int)(output.pointDistances[i] / RESOLUTION * cosf(angle));
+				int py = LIDAR_LOCATION - (int)(output.pointDistances[i] / RESOLUTION * sinf(angle));
+
+				if (px>=0 && px < CANVAS_SIZE && py >= 0 && py < LIDAR_LOCATION)
+					img.at<uchar>(py, px) = 0;
+			} 
 		}
 	} 
 	return nullptr;
 }
 
 int main(int argc, char *argv[]){
+	// Register the cleanup function to run at exit
+    atexit(cleanup);
+
+    // Register signal handlers
+    signal(SIGINT, handle_signal);  // Ctrl+C
+    signal(SIGTERM, handle_signal); // Kill signal
+
+
     InitLidar();
 	
-	while(getStreamState() != 3){
-		enableStream(true);
-		usleep(100000);
-	}
+	enableStream(true);
 
 	// Initialize the mutex
     if (pthread_mutex_init(&imageMutex, NULL) != 0) {
         fprintf(stderr, "Mutex init failed\n");
         return 1;
     }
-	pthread_t streamThread;
+	
 	pthread_create(&streamThread, NULL, processStream, NULL);
 
 
@@ -137,10 +164,8 @@ int main(int argc, char *argv[]){
 
 		if (!display.empty())
             cv::imwrite("lidar_frame.png", display);
-
-        if (cv::waitKey(1) == 27) break; // exit on ESC
 	}
-	
+
 	pthread_cancel(streamThread);
     pthread_join(streamThread, nullptr);
     pthread_mutex_destroy(&imageMutex);
